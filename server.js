@@ -5,173 +5,277 @@ const app = express();
 
 app.use(bodyParser.json());
 
+// Armazenamento de punições
 const punishments = {
   bans: new Map(),
   mutes: new Map()
 };
 
-const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1466903892163039274/V-BA7Zd9mU_uAFf5Rqs_2rj9sAy8o6pVuxpwImiN0Zo42cIr_AReZ7HEI1JQmTsreNwD";
+// IMPORTANTE: Cole seu Webhook do Discord aqui!
+const DISCORD_WEBHOOK = "COLE_SEU_WEBHOOK_AQUI";
 
-app.get('/check/:userId', (req, res) => {
-  const userId = req.params.userId;
-  let banned = false;
-  let muted = false;
-  let banReason = null;
-  let muteExpiry = null;
-  
-  if (punishments.bans.has(userId)) {
-    const banData = punishments.bans.get(userId);
-    if (banData.permanent || (banData.expiry && Date.now() < banData.expiry * 1000)) {
-      banned = true;
-      banReason = banData.reason;
-    } else {
-      punishments.bans.delete(userId);
-    }
-  }
-  
-  if (punishments.mutes.has(userId)) {
-    const muteData = punishments.mutes.get(userId);
-    if (muteData.expiry && Date.now() < muteData.expiry * 1000) {
-      muted = true;
-      muteExpiry = muteData.expiry;
-    } else {
-      punishments.mutes.delete(userId);
-    }
-  }
-  
-  res.json({ banned, muted, banReason, muteExpiry });
-});
-
-app.post('/punish', async (req, res) => {
-  const { userId, type, data } = req.body;
-  console.log(`[PUNISH] Aplicando ${type} para usuário ${userId}`);
-  
-  switch (type) {
-    case 'BAN_PERM':
-      punishments.bans.set(userId, {
-        permanent: true,
-        reason: data.reason || 'Violação dos termos',
-        timestamp: Math.floor(Date.now() / 1000)
-      });
-      break;
-    case 'BAN_7D':
-      punishments.bans.set(userId, {
-        permanent: false,
-        expiry: data.expiry,
-        reason: data.reason || 'Violações repetidas',
-        timestamp: Math.floor(Date.now() / 1000)
-      });
-      break;
-    case 'MUTE_24H':
-    case 'MUTE_1H':
-      punishments.mutes.set(userId, {
-        expiry: data.expiry,
-        timestamp: Math.floor(Date.now() / 1000)
-      });
-      break;
-  }
-  
-  res.json({ success: true });
-});
-
-app.post('/discord-interaction', async (req, res) => {
-  const interaction = req.body;
-  
-  console.log('[DISCORD] Recebida interação:', JSON.stringify(interaction, null, 2));
-  
-  // Responder ao PING do Discord (verificação inicial)
-  if (interaction.type === 1) {
-    console.log('[DISCORD] Respondendo PONG ao Discord');
-    return res.json({ type: 1 });
-  }
-  
-  // Processar interações de botões
-  if (interaction.type === 3) {
-    const customId = interaction.data.custom_id;
-    const parts = customId.split('_');
-    const action = parts[0] + '_' + parts[1];
-    const userId = parts[2];
-    let responseMessage = '';
-    
-    switch (action) {
-      case 'ban_perm':
-        punishments.bans.set(userId, {
-          permanent: true,
-          reason: 'Ban aplicado por moderador',
-          timestamp: Math.floor(Date.now() / 1000)
-        });
-        responseMessage = `✅ Usuário ${userId} foi **banido permanentemente**.`;
-        break;
-      case 'ban_7d':
-        const ban7dExpiry = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
-        punishments.bans.set(userId, {
-          permanent: false,
-          expiry: ban7dExpiry,
-          reason: 'Ban temporário por moderador',
-          timestamp: Math.floor(Date.now() / 1000)
-        });
-        responseMessage = `✅ Usuário ${userId} foi **banido por 7 dias**.`;
-        break;
-      case 'mute_1h':
-        const mute1hExpiry = Math.floor(Date.now() / 1000) + (60 * 60);
-        punishments.mutes.set(userId, {
-          expiry: mute1hExpiry,
-          timestamp: Math.floor(Date.now() / 1000)
-        });
-        responseMessage = `✅ Usuário ${userId} foi **mutado por 1 hora**.`;
-        break;
-      case 'ignore':
-        responseMessage = `✅ Alerta para usuário ${userId} foi **ignorado**.`;
-        break;
-      default:
-        responseMessage = '❌ Ação desconhecida.';
-    }
-    
-    try {
-      await axios.patch(
-        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
-        { content: responseMessage, components: [] }
-      );
-    } catch (error) {
-      console.error('Erro ao atualizar mensagem:', error);
-    }
-    
-    console.log(`[ACTION] ${action} aplicado ao usuário ${userId}`);
-    return res.json({ type: 4, data: { content: responseMessage, flags: 64 } });
-  }
-  
-  // Tipo de interação não suportado
-  return res.status(400).json({ error: 'Invalid interaction type' });
-});
-
+// Rota principal - Status
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
     bans: punishments.bans.size,
     mutes: punishments.mutes.size,
-    version: '2.1',
-    timestamp: new Date().toISOString()
+    version: '3.0'
   });
 });
 
-app.get('/punishments', (req, res) => {
-  const allPunishments = {
-    bans: Array.from(punishments.bans.entries()).map(([userId, data]) => ({ userId, ...data })),
-    mutes: Array.from(punishments.mutes.entries()).map(([userId, data]) => ({ userId, ...data }))
-  };
-  res.json(allPunishments);
+// ============================================
+// ENDPOINT DO DISCORD - CORRIGIDO
+// ============================================
+app.post('/discord-interaction', async (req, res) => {
+  console.log('[DISCORD] 📨 Requisição recebida');
+  console.log('[DISCORD] Body:', JSON.stringify(req.body, null, 2));
+  console.log('[DISCORD] Headers:', JSON.stringify(req.headers, null, 2));
+  
+  const interaction = req.body;
+  
+  // ✅ RESPONDER AO PING (Type 1) - OBRIGATÓRIO PARA VALIDAÇÃO
+  if (!interaction || !interaction.type) {
+    console.log('[DISCORD] ❌ Requisição sem type');
+    return res.status(400).json({ 
+      error: 'Missing interaction type' 
+    });
+  }
+  
+  if (interaction.type === 1) {
+    console.log('[DISCORD] ✅ PING recebido do Discord - Respondendo PONG');
+    return res.json({ type: 1 });
+  }
+  
+  // Tipo 3 = Message Component (Botão clicado)
+  if (interaction.type === 3) {
+    console.log('[DISCORD] 🔘 Botão clicado:', interaction.data?.custom_id);
+    
+    const customId = interaction.data?.custom_id;
+    const userId = interaction.member?.user?.id;
+    const username = interaction.member?.user?.username;
+    
+    if (!customId || !userId) {
+      return res.status(400).json({ 
+        error: 'Invalid interaction data' 
+      });
+    }
+    
+    // Processar ações de BAN e MUTE
+    if (customId.startsWith('ban_')) {
+      const targetUserId = customId.replace('ban_', '');
+      punishments.bans.set(targetUserId, {
+        bannedBy: username,
+        timestamp: Date.now()
+      });
+      
+      console.log(`[DISCORD] ⛔ Usuário ${targetUserId} banido por ${username}`);
+      
+      return res.json({
+        type: 4,
+        data: {
+          content: `✅ Usuário banido com sucesso por ${username}`,
+          flags: 64 // Mensagem efêmera (só quem clicou vê)
+        }
+      });
+    }
+    
+    if (customId.startsWith('mute_')) {
+      const targetUserId = customId.replace('mute_', '');
+      punishments.mutes.set(targetUserId, {
+        mutedBy: username,
+        timestamp: Date.now(),
+        duration: 3600000 // 1 hora
+      });
+      
+      console.log(`[DISCORD] 🔇 Usuário ${targetUserId} mutado por ${username}`);
+      
+      return res.json({
+        type: 4,
+        data: {
+          content: `✅ Usuário mutado por 1 hora por ${username}`,
+          flags: 64
+        }
+      });
+    }
+    
+    if (customId.startsWith('warn_')) {
+      const targetUserId = customId.replace('warn_', '');
+      
+      console.log(`[DISCORD] ⚠️ Usuário ${targetUserId} avisado por ${username}`);
+      
+      return res.json({
+        type: 4,
+        data: {
+          content: `✅ Aviso registrado por ${username}`,
+          flags: 64
+        }
+      });
+    }
+  }
+  
+  // Tipo desconhecido
+  console.log('[DISCORD] ❓ Tipo de interação desconhecido:', interaction.type);
+  return res.status(400).json({ 
+    error: 'Unknown interaction type' 
+  });
 });
 
-app.delete('/remove/:userId', (req, res) => {
+// ============================================
+// ROTA: Receber alertas do Roblox
+// ============================================
+app.post('/report', async (req, res) => {
+  console.log('[REPORT] 📨 Alerta recebido do Roblox');
+  
+  const { userId, username, message, reason, severity } = req.body;
+  
+  if (!userId || !username || !message) {
+    return res.status(400).json({ 
+      error: 'Missing required fields' 
+    });
+  }
+  
+  // Enviar para o Discord com botões
+  try {
+    const embed = {
+      title: '🚨 ALERTA DE MODERAÇÃO',
+      color: severity === 'high' ? 0xFF0000 : 0xFFA500,
+      fields: [
+        { name: '👤 Usuário', value: `${username} (ID: ${userId})`, inline: true },
+        { name: '📝 Mensagem', value: message, inline: false },
+        { name: '⚠️ Motivo', value: reason || 'Conteúdo inadequado', inline: true },
+        { name: '🕐 Horário', value: new Date().toLocaleString('pt-BR'), inline: true }
+      ],
+      footer: { text: 'Embee Chat Moderation v3.0' }
+    };
+    
+    const components = [
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 4, // Vermelho
+            label: '⛔ Banir',
+            custom_id: `ban_${userId}`
+          },
+          {
+            type: 2,
+            style: 2, // Cinza
+            label: '🔇 Mutar (1h)',
+            custom_id: `mute_${userId}`
+          },
+          {
+            type: 2,
+            style: 1, // Azul
+            label: '⚠️ Avisar',
+            custom_id: `warn_${userId}`
+          }
+        ]
+      }
+    ];
+    
+    if (DISCORD_WEBHOOK && DISCORD_WEBHOOK !== "COLE_SEU_WEBHOOK_AQUI") {
+      await axios.post(DISCORD_WEBHOOK, {
+        embeds: [embed],
+        components: components
+      });
+      console.log('[DISCORD] ✅ Mensagem enviada com sucesso');
+    } else {
+      console.log('[DISCORD] ⚠️ Webhook não configurado - mensagem não enviada');
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Alerta enviado para moderação' 
+    });
+    
+  } catch (error) {
+    console.error('[DISCORD] ❌ Erro ao enviar webhook:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to send alert',
+      details: error.message 
+    });
+  }
+});
+
+// ============================================
+// ROTA: Verificar se usuário está banido
+// ============================================
+app.get('/check-ban/:userId', (req, res) => {
   const userId = req.params.userId;
-  const hadBan = punishments.bans.delete(userId);
-  const hadMute = punishments.mutes.delete(userId);
-  res.json({ success: hadBan || hadMute, removed: { ban: hadBan, mute: hadMute } });
+  const banned = punishments.bans.has(userId);
+  
+  console.log(`[BAN CHECK] Usuário ${userId}: ${banned ? 'BANIDO' : 'OK'}`);
+  
+  res.json({ 
+    banned,
+    data: banned ? punishments.bans.get(userId) : null
+  });
 });
 
+// ============================================
+// ROTA: Verificar se usuário está mutado
+// ============================================
+app.get('/check-mute/:userId', (req, res) => {
+  const userId = req.params.userId;
+  const muteData = punishments.mutes.get(userId);
+  
+  if (!muteData) {
+    console.log(`[MUTE CHECK] Usuário ${userId}: OK`);
+    return res.json({ muted: false });
+  }
+  
+  // Verificar se o mute expirou
+  const elapsed = Date.now() - muteData.timestamp;
+  if (elapsed > muteData.duration) {
+    punishments.mutes.delete(userId);
+    console.log(`[MUTE CHECK] Usuário ${userId}: Mute expirado`);
+    return res.json({ muted: false });
+  }
+  
+  const remaining = Math.ceil((muteData.duration - elapsed) / 1000 / 60);
+  console.log(`[MUTE CHECK] Usuário ${userId}: MUTADO (${remaining} min restantes)`);
+  
+  res.json({ 
+    muted: true,
+    remainingMinutes: remaining,
+    data: muteData
+  });
+});
+
+// ============================================
+// ROTA: Limpar punições (admin)
+// ============================================
+app.post('/clear-punishments', (req, res) => {
+  const { type, userId } = req.body;
+  
+  if (type === 'ban' && userId) {
+    punishments.bans.delete(userId);
+    console.log(`[ADMIN] Ban removido: ${userId}`);
+  } else if (type === 'mute' && userId) {
+    punishments.mutes.delete(userId);
+    console.log(`[ADMIN] Mute removido: ${userId}`);
+  } else if (type === 'all') {
+    punishments.bans.clear();
+    punishments.mutes.clear();
+    console.log('[ADMIN] Todas as punições foram limpas');
+  }
+  
+  res.json({ success: true });
+});
+
+// ============================================
+// INICIAR SERVIDOR
+// ============================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🛡️ Embee Chat Moderation Server v2.1 rodando na porta ${PORT}`);
+  console.log('\n' + '='.repeat(50));
+  console.log('🛡️  EMBEE CHAT MODERATION SERVER v3.0');
+  console.log('='.repeat(50));
+  console.log(`✅ Servidor rodando na porta ${PORT}`);
   console.log(`📡 Endpoint Discord: /discord-interaction`);
-  console.log(`🌐 Pronto para receber requisições!`);
+  console.log(`🔍 Status: http://localhost:${PORT}/`);
+  console.log(`⚠️  IMPORTANTE: Configure o DISCORD_WEBHOOK!`);
+  console.log('='.repeat(50) + '\n');
 });
